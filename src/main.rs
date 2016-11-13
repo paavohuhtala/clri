@@ -4,6 +4,7 @@
 
 #![allow(dead_code)]
 
+#[macro_use] extern crate enum_primitive;
 extern crate byteorder;
 
 mod loader;

@@ -5,3 +5,4 @@ authors = ["Paavo Huhtala <paavo.huhtala@gmail.com>"]
 
 [dependencies]
 byteorder = "0.5"
+enum_primitive = "*"

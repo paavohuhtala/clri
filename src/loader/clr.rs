@@ -5,17 +5,7 @@ use std::iter::FromIterator;
 use byteorder::{ReadBytesExt, LittleEndian};
 use utils::stream::*;
 use loader::pe::{DataDirectory, Section};
-use loader::stream::{StreamHeader};
-
-impl ReadableStruct for StreamHeader {
-  fn read_from<R: Read + Seek>(reader: &mut R) -> Result<StreamHeader> {
-    let offset = reader.read_u32::<LittleEndian>()?;
-    let size = reader.read_u32::<LittleEndian>()?;
-    let name = reader.read_c_str_aligned(4)?;
-
-    Ok(StreamHeader { offset, size, name })
-  }
-} 
+use loader::stream::{StreamHeader, MetaDataTablesStream};
 
 #[derive(Debug)]
 pub struct CLIHeader {
@@ -24,7 +14,7 @@ pub struct CLIHeader {
   pub metadata_rva: DataDirectory
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MetadataHeader {
   clr_version: String,
   stream_headers: HashMap<String, StreamHeader>
@@ -38,8 +28,7 @@ pub struct MethodBody {
 #[derive(Debug)]
 pub struct CLRImage {
   cli_header: CLIHeader,
-  strong_name_signature: Option<Vec<u8>>,
-  metadata_header: MetadataHeader
+  strong_name_signature: Option<Vec<u8>>
 }
 
 impl ReadableStruct for CLIHeader {
@@ -134,8 +123,12 @@ impl CLRImage {
     reader.seek(SeekFrom::Start(metadata_header_offset as u64))?;
     let metadata_header = MetadataHeader::read_from(&mut reader)?;
 
-    println!("{:?}", metadata_header);
+    let metadata_stream_header = metadata_header.stream_headers.get("#~").unwrap();
+    reader.seek(SeekFrom::Start((metadata_header_offset + metadata_stream_header.offset) as u64))?;
+    let metadata_tables = MetaDataTablesStream::read_from(&mut reader)?;
 
-    Ok(CLRImage { cli_header, strong_name_signature, metadata_header })
+    println!("{:?}", metadata_tables);
+
+    Ok(CLRImage { cli_header, strong_name_signature })
   }
 }
