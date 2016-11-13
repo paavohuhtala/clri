@@ -1,0 +1,7 @@
+[package]
+name = "clri"
+version = "0.1.0"
+authors = ["Paavo Huhtala <paavo.huhtala@gmail.com>"]
+
+[dependencies]
+byteorder = "0.5"
