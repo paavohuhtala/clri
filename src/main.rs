@@ -9,6 +9,7 @@
 extern crate byteorder;
 
 #[macro_use] mod utils;
+mod metadata;
 mod loader;
 
 #[cfg(test)]

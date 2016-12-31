@@ -5,6 +5,7 @@ use enum_primitive::FromPrimitive;
 use byteorder::{ReadBytesExt, LittleEndian};
 
 use utils::stream::*;
+use metadata::heap::{StringHeap, UserStringHeap, UserString};
 use loader::tables::{ModuleEntry, TableEntryReader};
 
 #[derive(Debug, Clone)]
@@ -27,36 +28,6 @@ impl ReadableStruct for StreamHeader {
 /// The #~ stream.
 #[derive(Debug, Clone)]
 pub struct MetaDataTablesStream {
-
-}
-
-/// The #String stream.
-#[derive(Debug, Clone)]
-pub struct AsciiStringsStream {
-  pub strings: Vec<String>
-}
-
-#[derive(Debug, Clone)]
-pub enum UserString {
-  Valid(String),
-  Garbage
-}
-
-/// The #US stream.
-#[derive(Debug, Clone)]
-pub struct UserStringsStream {
-  pub strings: Vec<UserString>
-}
-
-/// The #Blob stream.
-#[derive(Debug, Clone)]
-pub struct BlobStream {
-
-}
-
-/// The #GUID stream.
-#[derive(Debug, Clone)]
-pub struct GuidStream {
 
 }
 
@@ -222,18 +193,23 @@ pub trait StreamReader {
   fn read_from<R: Read + Seek>(reader: &mut R, header: &StreamHeader) -> Result<Self> where Self : Sized;
 }
 
-impl StreamReader for AsciiStringsStream {
-  fn read_from<R: Read + Seek>(reader: &mut R, header: &StreamHeader) -> Result<AsciiStringsStream> {
-    let mut strings: Vec<String> = vec![];
+impl StreamReader for StringHeap {
+  fn read_from<R: Read + Seek>(reader: &mut R, header: &StreamHeader) -> Result<StringHeap> {
+    let mut strings: Vec<(u32, String)> = vec![];
     let mut bytes_read: usize = 0;
 
     while bytes_read < (header.size as usize) {
+      let start = bytes_read;
       let string_buffer = reader.read_c_str()?;
       bytes_read += string_buffer.len() + 1;
-      strings.push(string_buffer);
+      strings.push((start as u32, string_buffer));
     }
 
-    Ok(AsciiStringsStream { strings })
+    let string_heap = StringHeap {
+      strings: strings.into_iter().collect()
+    };
+
+    Ok(string_heap)
   }
 }
 
@@ -280,30 +256,35 @@ impl UserString {
   }
 }
 
-impl StreamReader for UserStringsStream {
-  fn read_from<R: Read + Seek>(reader: &mut R, header: &StreamHeader) -> Result<UserStringsStream> {
-    let mut strings: Vec<UserString> = vec![];
+impl StreamReader for UserStringHeap {
+  fn read_from<R: Read + Seek>(reader: &mut R, header: &StreamHeader) -> Result<UserStringHeap> {
+    let mut strings: Vec<(u32, UserString)> = vec![];
     let mut bytes_read: usize = 0;
 
     // Always starts with a null byte, which is handled like any other table entry
 
     while bytes_read < header.size as usize {
+      let start = bytes_read;
       let decoded = StreamUtils::decode_compressed_int(reader)?;
       bytes_read += decoded.compressed_size as usize;
 
       if decoded.value == 0 {
-        strings.push(UserString::Valid("".to_string()));
+        strings.push((start as u32, UserString::Valid("".to_string())));
         continue;
       }
 
       let mut string_buffer = vec![0u16; (decoded.value / 2) as usize];
       reader.read_exact_16(&mut string_buffer)?;
-      strings.push(UserString::from_utf16(&string_buffer));
+      strings.push((start as u32, UserString::from_utf16(&string_buffer)));
 
       let is_ascii = reader.read_u8()?;
       bytes_read += decoded.value as usize;
     }
 
-    Ok( { UserStringsStream { strings } } )
+    let string_heap = UserStringHeap {
+      strings: strings.into_iter().collect()
+    };
+
+    Ok(string_heap)
   }
 }
