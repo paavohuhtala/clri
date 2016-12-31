@@ -44,7 +44,7 @@ pub enum UserString {
 
 /// The #US stream.
 #[derive(Debug, Clone)]
-pub struct UnicodeStringsStream {
+pub struct UserStringsStream {
   pub strings: Vec<UserString>
 }
 
@@ -280,8 +280,8 @@ impl UserString {
   }
 }
 
-impl StreamReader for UnicodeStringsStream {
-  fn read_from<R: Read + Seek>(reader: &mut R, header: &StreamHeader) -> Result<UnicodeStringsStream> {
+impl StreamReader for UserStringsStream {
+  fn read_from<R: Read + Seek>(reader: &mut R, header: &StreamHeader) -> Result<UserStringsStream> {
     let mut strings: Vec<UserString> = vec![];
     let mut bytes_read: usize = 0;
 
@@ -304,6 +304,6 @@ impl StreamReader for UnicodeStringsStream {
       bytes_read += decoded.value as usize;
     }
 
-    Ok( { UnicodeStringsStream { strings } } )
+    Ok( { UserStringsStream { strings } } )
   }
 }

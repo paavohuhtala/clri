@@ -5,7 +5,7 @@ use std::iter::FromIterator;
 use byteorder::{ReadBytesExt, LittleEndian};
 use utils::stream::*;
 use loader::pe::{DataDirectory, Section};
-use loader::stream::{StreamHeader, MetaDataTablesStream, AsciiStringsStream, UnicodeStringsStream, StreamReader};
+use loader::stream::{StreamHeader, MetaDataTablesStream, AsciiStringsStream, UserStringsStream, StreamReader};
 
 #[derive(Debug)]
 pub struct CLIHeader {
@@ -131,11 +131,11 @@ impl CLRImage {
     }
 
     let strings_table: AsciiStringsStream = read_stream(&mut reader, metadata_header_offset, &metadata_header, "#Strings")?;
-    let unicode_strings_table: UnicodeStringsStream = read_stream(&mut reader, metadata_header_offset, &metadata_header, "#US")?;
+    let user_strings_table: UserStringsStream = read_stream(&mut reader, metadata_header_offset, &metadata_header, "#US")?;
     let metadata_tables: MetaDataTablesStream = read_stream(&mut reader, metadata_header_offset, &metadata_header, "#~")?;
 
     println!("{:?}", strings_table);
-    println!("{:?}", unicode_strings_table);
+    println!("{:?}", user_strings_table);
     println!("{:?}", metadata_tables);
 
     Ok(CLRImage { cli_header, strong_name_signature })
