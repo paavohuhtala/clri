@@ -5,7 +5,7 @@ use std::iter::FromIterator;
 use byteorder::{ReadBytesExt, LittleEndian};
 use utils::stream::*;
 use loader::pe::{DataDirectory, Section};
-use loader::stream::{StreamHeader, MetaDataTablesStream};
+use loader::stream::{StreamHeader, MetaDataTablesStream, AsciiStringsStream, UnicodeStringsStream, StreamReader};
 
 #[derive(Debug)]
 pub struct CLIHeader {
@@ -46,7 +46,7 @@ impl ReadableStruct for CLIHeader {
 
     let flags = reader.read_u32::<LittleEndian>()?;
     // 1 = IL only
-    assert_eq!(1, flags);
+    assert_eq!(1, flags & 0b1);
 
     let entry_point_token = reader.read_u32::<LittleEndian>()?; 
     let resources_rva = DataDirectory::read_from(reader)?;
@@ -91,6 +91,7 @@ impl ReadableStruct for MetadataHeader {
 
     for _ in 0 .. stream_count {
       let stream_header = StreamHeader::read_from(reader)?;
+      println!("{:?}", stream_header);
       stream_headers.push((stream_header.name.clone(), stream_header));
     }
 
@@ -123,10 +124,18 @@ impl CLRImage {
     reader.seek(SeekFrom::Start(metadata_header_offset as u64))?;
     let metadata_header = MetadataHeader::read_from(&mut reader)?;
 
-    let metadata_stream_header = metadata_header.stream_headers.get("#~").unwrap();
-    reader.seek(SeekFrom::Start((metadata_header_offset + metadata_stream_header.offset) as u64))?;
-    let metadata_tables = MetaDataTablesStream::read_from(&mut reader)?;
+    fn read_stream<T: StreamReader, R: Read + Seek>(reader: &mut R, offset: u32, metadata_header: &MetadataHeader, name: &str) -> Result<T> {
+      let header = metadata_header.stream_headers.get(name).unwrap();
+      reader.seek(SeekFrom::Start((offset + header.offset) as u64))?;
+      T::read_from(reader, header)
+    }
 
+    let strings_table: AsciiStringsStream = read_stream(&mut reader, metadata_header_offset, &metadata_header, "#Strings")?;
+    let unicode_strings_table: UnicodeStringsStream = read_stream(&mut reader, metadata_header_offset, &metadata_header, "#US")?;
+    let metadata_tables: MetaDataTablesStream = read_stream(&mut reader, metadata_header_offset, &metadata_header, "#~")?;
+
+    println!("{:?}", strings_table);
+    println!("{:?}", unicode_strings_table);
     println!("{:?}", metadata_tables);
 
     Ok(CLRImage { cli_header, strong_name_signature })

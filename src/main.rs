@@ -5,10 +5,14 @@
 #![allow(dead_code)]
 
 #[macro_use] extern crate enum_primitive;
+#[macro_use] extern crate bitflags;
 extern crate byteorder;
 
+#[macro_use] mod utils;
 mod loader;
-mod utils;
+
+#[cfg(test)]
+mod tests;
 
 use loader::pe;
 use std::marker::PhantomData;
@@ -61,7 +65,7 @@ impl<'a> MethodState<'a> {
 
 fn main() {
   println!("CLRi 0.1");
-  let file = std::fs::File::open("sample/addition/add.exe").unwrap();
+  let file = std::fs::File::open("sample/helloworld/HelloWorld.exe").unwrap();
   let mut file_reader = std::io::BufReader::new(file);
   let pe_file = pe::PEFile::read_from(&mut file_reader).unwrap();
   let text = pe_file.sections.get(".text").unwrap();

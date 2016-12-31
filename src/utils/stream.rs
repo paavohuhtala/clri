@@ -29,6 +29,10 @@ pub trait ReadExt {
   /// Reads a string of an unknown length, which is null-padded to a multiple of `alignment`.
   /// Consumes a number of characters equal to the length of the string plus the padding.
   fn read_c_str_aligned(&mut self, alignment: usize) -> Result<String>;
+  // Reads a null-terminated string of unspecified maximum size. 
+  fn read_c_str(&mut self) -> Result<String>;
+  // Read the exact number of little-endian 16-bit integers to fill the buffer.
+  fn read_exact_16(&mut self, buffer: &mut[u16]) -> Result<()>;
 }
 
 impl<T: Read> ReadExt for T {
@@ -59,6 +63,30 @@ impl<T: Read> ReadExt for T {
     str_buffer.truncate(real_size);
 
     Ok(String::from_utf8(str_buffer).unwrap())
+  }
+
+  fn read_c_str(&mut self) -> Result<String> {
+    let mut str_buffer = Vec::with_capacity(16);
+
+    loop {
+      let next_char = self.read_u8()?;
+
+      if next_char == 0 {
+        break;
+      }
+
+      str_buffer.push(next_char);
+    }
+
+    Ok(String::from_utf8(str_buffer).unwrap())
+  }
+
+  fn read_exact_16(&mut self, buffer: &mut[u16]) -> Result<()> {
+    for i in 0 .. buffer.len() {
+      buffer[i] = self.read_u16::<LittleEndian>()?
+    }
+
+    Ok(())
   }
 }
 

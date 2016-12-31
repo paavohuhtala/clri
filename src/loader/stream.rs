@@ -3,7 +3,9 @@ use std::io::{Read, Seek, Result};
 use std::collections::HashMap;
 use enum_primitive::FromPrimitive;
 use byteorder::{ReadBytesExt, LittleEndian};
+
 use utils::stream::*;
+use loader::tables::{ModuleEntry, TableEntryReader};
 
 #[derive(Debug, Clone)]
 pub struct StreamHeader {
@@ -20,7 +22,7 @@ impl ReadableStruct for StreamHeader {
 
     Ok(StreamHeader { offset, size, name })
   }
-} 
+}
 
 /// The #~ stream.
 #[derive(Debug, Clone)]
@@ -31,13 +33,19 @@ pub struct MetaDataTablesStream {
 /// The #String stream.
 #[derive(Debug, Clone)]
 pub struct AsciiStringsStream {
+  pub strings: Vec<String>
+}
 
+#[derive(Debug, Clone)]
+pub enum UserString {
+  Valid(String),
+  Garbage
 }
 
 /// The #US stream.
 #[derive(Debug, Clone)]
 pub struct UnicodeStringsStream {
-
+  pub strings: Vec<UserString>
 }
 
 /// The #Blob stream.
@@ -52,27 +60,36 @@ pub struct GuidStream {
 
 }
 
-#[derive(Debug)]
-enum FieldSize {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum IndexSize {
   Word,
   Dword
 }
 
-impl From<bool> for FieldSize {
-  fn from(x: bool) -> FieldSize {
-    if x {FieldSize::Dword} else {FieldSize::Word} 
+impl IndexSize {
+  pub fn to_u32(self) -> u32 {
+    match self {
+      IndexSize::Word => u16::max_value() as u32,
+      IndexSize::Dword => u32::max_value()
+    }
+  }
+}
+
+impl From<bool> for IndexSize {
+  fn from(x: bool) -> IndexSize {
+    if x {IndexSize::Dword} else {IndexSize::Word} 
   }
 }
 
 #[derive(Debug)]
-struct HeapOffsetSizes {
-  string_index: FieldSize,
-  guid_index: FieldSize,
-  blob_index: FieldSize
+pub struct HeapOffsetSizes {
+  pub string_index: IndexSize,
+  pub guid_index: IndexSize,
+  pub blob_index: IndexSize
 }
 
 enum_from_primitive! {
-  #[derive(Hash, PartialEq, Eq, Debug)]
+  #[derive(Hash, PartialEq, Eq, Debug, Copy, Clone)]
   pub enum TableId {
     Module                  = 00,
     Field                   = 04,
@@ -136,8 +153,8 @@ impl From<u64> for TableIds {
   }
 }
 
-#[derive(Debug)]
-pub struct RowCounts(HashMap<TableId, u32>);
+pub type RowCounts = HashMap<TableId, u32>;
+pub type IndexSizes = HashMap<TableId, IndexSize>;
 
 impl From<u8> for HeapOffsetSizes {
   fn from(x: u8) -> HeapOffsetSizes {
@@ -146,15 +163,22 @@ impl From<u8> for HeapOffsetSizes {
     let blob_index_bit = (x & 0b100) > 0;
 
     HeapOffsetSizes {
-      string_index: FieldSize::from(str_index_bit),
-      guid_index: FieldSize::from(guid_index_bit),
-      blob_index: FieldSize::from(blob_index_bit)
+      string_index: IndexSize::from(str_index_bit),
+      guid_index: IndexSize::from(guid_index_bit),
+      blob_index: IndexSize::from(blob_index_bit)
     }
   }
 }
 
-impl ReadableStruct for MetaDataTablesStream {
-  fn read_from<R: Read + Seek>(reader: &mut R) -> Result<MetaDataTablesStream> {
+impl MetaDataTablesStream {
+  fn get_index_sizes(row_counts: &HashMap<TableId, u32>) -> IndexSizes {
+    row_counts.iter().map(|(&k, &v)|
+      (k.clone(), if v > (u16::max_value() as u32) { IndexSize::Dword } else { IndexSize::Word } )).collect()
+  }
+}
+
+impl StreamReader for MetaDataTablesStream {
+  fn read_from<R: Read + Seek>(reader: &mut R, header: &StreamHeader) -> Result<MetaDataTablesStream> {
     // Reserved, not used
     assert_eq!(0, reader.read_u32::<LittleEndian>()?);
 
@@ -184,6 +208,102 @@ impl ReadableStruct for MetaDataTablesStream {
     let table_rows_counts = table_row_counts_vec.into_iter().collect::<HashMap<TableId, u32>>();
     println!("Metadata table row counts: {:?}", table_rows_counts);
 
+    let index_sizes = MetaDataTablesStream::get_index_sizes(&table_rows_counts);
+    println!("Metadata table index sizes: {:?}", index_sizes);
+
+    let module = ModuleEntry::read_entry(reader, heap_offset_sizes, index_sizes)?;
+    println!("Module: {:?}", module);
+
     Ok(MetaDataTablesStream { })
+  }
+}
+
+pub trait StreamReader {
+  fn read_from<R: Read + Seek>(reader: &mut R, header: &StreamHeader) -> Result<Self> where Self : Sized;
+}
+
+impl StreamReader for AsciiStringsStream {
+  fn read_from<R: Read + Seek>(reader: &mut R, header: &StreamHeader) -> Result<AsciiStringsStream> {
+    let mut strings: Vec<String> = vec![];
+    let mut bytes_read: usize = 0;
+
+    while bytes_read < (header.size as usize) {
+      let string_buffer = reader.read_c_str()?;
+      bytes_read += string_buffer.len() + 1;
+      strings.push(string_buffer);
+    }
+
+    Ok(AsciiStringsStream { strings })
+  }
+}
+
+struct StreamUtils { }
+
+pub struct CompressedUint {
+  pub value: u32,
+  pub compressed_size: u8
+}
+
+impl StreamUtils {
+  // ECMA 335, page 272
+  // Inspired by
+  // https://github.com/jbevain/cecil/blob/505b07d6974d8405a63124139733c6fdc0e67bc7/Mono.Cecil.PE/ByteBuffer.cs#L101
+  pub fn decode_compressed_int<R: Read + Seek>(reader: &mut R) -> Result<CompressedUint> {
+    let first_byte = reader.read_u8()?;
+
+    // Starts with a zero bit -> bits 1-7 are the length
+    let (value, compressed_size) = if (first_byte & 0x80) == 0 {
+      (first_byte as u32, 1)
+    // Starts with 0b10 -> bits 2-7 + the next byte is the length
+    } else if (first_byte & 0x40) == 0 {
+      ((((first_byte & !0x80) as u32) << 8) | (reader.read_u8()? as u32), 2)
+    // We assume the blob starts with 0b110 -> bits 3-7 + the next 3 bytes is the length 
+    } else {
+      let mut rest = [0u8; 3];
+      reader.read_exact(&mut rest)?;
+      ((((first_byte & !0xc0) as u32) << 24)
+        | ((rest[0] as u32) << 16)
+        | ((rest[1] as u32) << 8)
+        | (rest[2] as u32), 4)
+    };
+
+    Ok(CompressedUint { value, compressed_size })
+  }
+}
+
+impl UserString {
+  pub fn from_utf16(buffer: &[u16]) -> UserString {
+    match String::from_utf16(buffer) {
+      Ok(string) => UserString::Valid(string),
+      _ => UserString::Garbage
+    }
+  }
+}
+
+impl StreamReader for UnicodeStringsStream {
+  fn read_from<R: Read + Seek>(reader: &mut R, header: &StreamHeader) -> Result<UnicodeStringsStream> {
+    let mut strings: Vec<UserString> = vec![];
+    let mut bytes_read: usize = 0;
+
+    // Always starts with a null byte, which is handled like any other table entry
+
+    while bytes_read < header.size as usize {
+      let decoded = StreamUtils::decode_compressed_int(reader)?;
+      bytes_read += decoded.compressed_size as usize;
+
+      if decoded.value == 0 {
+        strings.push(UserString::Valid("".to_string()));
+        continue;
+      }
+
+      let mut string_buffer = vec![0u16; (decoded.value / 2) as usize];
+      reader.read_exact_16(&mut string_buffer)?;
+      strings.push(UserString::from_utf16(&string_buffer));
+
+      let is_ascii = reader.read_u8()?;
+      bytes_read += decoded.value as usize;
+    }
+
+    Ok( { UnicodeStringsStream { strings } } )
   }
 }
