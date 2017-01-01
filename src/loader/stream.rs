@@ -6,7 +6,7 @@ use byteorder::{ReadBytesExt, LittleEndian};
 
 use utils::stream::*;
 use metadata::heap::{StringHeap, UserStringHeap, UserString};
-use loader::tables::{ModuleEntry, TableEntryReader, TypeRefEntry};
+use loader::tables::{ModuleEntry, TableEntryReader, TypeRefEntry, TypeDefEntry};
 
 #[derive(Debug, Clone)]
 pub struct StreamHeader {
@@ -205,6 +205,15 @@ impl StreamReader for MetaDataTablesStream {
     }
 
     println!("TypeRefs: {:?}", type_refs);
+
+    let mut type_defs: Vec<TypeDefEntry> = Vec::new();
+
+    for _ in 0 .. *(table_rows_counts.get(&TableId::TypeDef).unwrap()) {
+      let entry = TypeDefEntry::read_entry(reader, &sizes)?;
+      type_defs.push(entry);
+    }
+
+    println!("TypeDefs: {:?}", type_defs);
 
     Ok(MetaDataTablesStream { })
   }

@@ -1,11 +1,11 @@
 
 #![allow(non_upper_case_globals)]
 
-use std::io::{Read, Seek, Result};
+use std::io::{Read, Result};
 use std::marker::PhantomData;
 use byteorder::{ReadBytesExt, LittleEndian};
 
-use loader::stream::{TableId, IndexSize, IndexSizes, RowCounts, HeapOffsetSizes, FieldSizes};
+use loader::stream::{TableId, IndexSize, RowCounts, FieldSizes};
 
 pub trait ReadIndexSizeExt {
   fn read_index<T>(&mut self, size: IndexSize) -> Result<Index<T>>;
@@ -122,6 +122,18 @@ impl TableEntryReader for TypeRefEntry {
     let namespace = reader.read_index(sizes.heap_sizes.string_index)?;
 
     Ok(TypeRefEntry { resolution_scope, name, namespace })
+  }
+}
+
+impl TableEntryReader for TypeDefEntry {
+  fn read_entry<R: Read>(reader: &mut R, sizes: &FieldSizes) -> Result<TypeDefEntry> {
+    let flags_encoded = reader.read_u32::<LittleEndian>()?;
+    let flags = TypeAttributes::from_bits(flags_encoded).unwrap();
+    let name = reader.read_index(sizes.heap_sizes.string_index)?;
+    let namespace = reader.read_index(sizes.heap_sizes.string_index)?;
+    let extends = TypeDefOrRef::read_from(reader, &sizes.row_counts)?;
+
+    Ok(TypeDefEntry { flags, name, namespace, extends })
   }
 }
 

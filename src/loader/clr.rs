@@ -5,7 +5,7 @@ use std::iter::FromIterator;
 use byteorder::{ReadBytesExt, LittleEndian};
 use utils::stream::*;
 use loader::pe::{DataDirectory, Section};
-use metadata::heap::{StringHeap, UserStringHeap, UserString};
+use metadata::heap::{StringHeap, UserStringHeap};
 use loader::stream::{StreamHeader, MetaDataTablesStream, StreamReader};
 
 #[derive(Debug)]
