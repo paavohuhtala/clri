@@ -5,7 +5,7 @@ use std::io::{Read, Seek, Result};
 use std::marker::PhantomData;
 use byteorder::{ReadBytesExt, LittleEndian};
 
-use loader::stream::{TableId, IndexSize, IndexSizes, RowCounts, HeapOffsetSizes};
+use loader::stream::{TableId, IndexSize, IndexSizes, RowCounts, HeapOffsetSizes, FieldSizes};
 
 pub trait ReadIndexSizeExt {
   fn read_index<T>(&mut self, size: IndexSize) -> Result<TableIndex<T>>;
@@ -23,13 +23,8 @@ impl<T: Read> ReadIndexSizeExt for T {
 #[derive(Debug, Copy, Clone)]
 pub struct TableIndex<T>(pub u32, PhantomData<T>);
 
-#[derive(Debug)]
-pub struct Table<T> {
-  entries: Vec<T>
-}
-
 pub trait TableEntryReader {
-  fn read_entry<R: Read>(reader: &mut R, heap_sizes: HeapOffsetSizes, index_sizes: IndexSizes) -> Result<Self> where Self : Sized;
+  fn read_entry<R: Read>(reader: &mut R, sizes: &FieldSizes) -> Result<Self> where Self : Sized;
 }
 
 impl<T> TableIndex<T> {
@@ -52,8 +47,14 @@ pub struct ModuleEntry {
 }
 
 #[derive(Debug)]
+pub struct ModuleRefEntry { }
+
+#[derive(Debug)]
+pub struct AssemblyRefEntry { }
+
+#[derive(Debug)]
 pub struct TypeRefEntry {
-  resolution_scope: TableIndex<ResolutionScopeTag>,
+  resolution_scope: ResolutionScope,
   name: TableIndex<StringHeap>,
   namespace: TableIndex<StringHeap>
 }
@@ -72,14 +73,24 @@ pub struct TypeSpecEntry {
 }
 
 impl TableEntryReader for ModuleEntry {
-  fn read_entry<R: Read>(reader: &mut R, heap_sizes: HeapOffsetSizes, _: IndexSizes) -> Result<ModuleEntry> {
+  fn read_entry<R: Read>(reader: &mut R, sizes: &FieldSizes) -> Result<ModuleEntry> {
     let generation = reader.read_u16::<LittleEndian>()?;
-    let name = reader.read_index(heap_sizes.string_index)?;
-    let mv_id = reader.read_index(heap_sizes.guid_index)?;
-    let enc_id = reader.read_index(heap_sizes.guid_index)?;
-    let enc_base_id = reader.read_index(heap_sizes.guid_index)?;
+    let name = reader.read_index(sizes.heap_sizes.string_index)?;
+    let mv_id = reader.read_index(sizes.heap_sizes.guid_index)?;
+    let enc_id = reader.read_index(sizes.heap_sizes.guid_index)?;
+    let enc_base_id = reader.read_index(sizes.heap_sizes.guid_index)?;
 
     Ok(ModuleEntry {generation, name, mv_id, enc_id, enc_base_id} )
+  }
+}
+
+impl TableEntryReader for TypeRefEntry {
+  fn read_entry<R: Read>(reader: &mut R, sizes: &FieldSizes) -> Result<TypeRefEntry> {
+    let resolution_scope = ResolutionScope::read_from(reader, &sizes.row_counts)?;
+    let name = reader.read_index(sizes.heap_sizes.string_index)?;
+    let namespace = reader.read_index(sizes.heap_sizes.string_index)?;
+
+    Ok(TypeRefEntry { resolution_scope, name, namespace })
   }
 }
 
@@ -124,27 +135,56 @@ impl TaggedIndex {
 
 macro_rules! max_table_entries {
   ($row_counts: expr, [$x: ident]) => {
-    *$row_counts.get(&TableId::$x).unwrap()
+    $row_counts.get(&TableId::$x).map(|x|*x).unwrap_or(0u32)
   };
   ($row_counts: expr, [$x: ident, $($tail: ident),+]) => {
     {
       use std::cmp::max;
-      max(*$row_counts.get(&TableId::$x).unwrap(), max_table_entries!($row_counts, [$($tail),+]))
+      max(max_table_entries!($row_counts, [$x]), max_table_entries!($row_counts, [$($tail),+]))
     }
   };
 }
 
-impl TypeDefOrRef {
-  pub fn read_from<R: Read>(reader: &mut R, row_counts: &RowCounts) -> Result<TypeDefOrRef> {
-    let max_size = max_table_entries!(row_counts, [TypeDef, TypeRef, TypeSpec]);
-    let tagged_index = TaggedIndex::read_from(reader, 2, max_size)?;
-    match tagged_index.tag {
-      0b00 => Ok(TypeDefOrRef::TypeDef(TableIndex::new(tagged_index.index))),
-      0b01 => Ok(TypeDefOrRef::TypeRef(TableIndex::new(tagged_index.index))),
-      0b10 => Ok(TypeDefOrRef::TypeSpec(TableIndex::new(tagged_index.index))),
-      otherwise => panic!("Invalid TypeDefOrRef tag: {}", otherwise)
+macro_rules! tagged_index_parser {
+    {
+      type: $type_: ident,
+      tag_length: $tag_length: expr,
+      patterns: [$($pattern: expr => $case: ident),*] 
+    } => {
+      impl $type_ {
+        pub fn read_from<R: Read>(reader: &mut R, row_counts: &RowCounts) -> Result<$type_> {
+          let max_size = max_table_entries!(row_counts, [$($case),*]);
+          let tagged_index = TaggedIndex::read_from(reader, 2, max_size)?;
+          match tagged_index.tag {
+            $(
+              $pattern => Ok($type_::$case(TableIndex::new(tagged_index.index)))
+            ),+,
+            otherwise => panic!("Invalid tag: {}", otherwise)
+          }
+      }
     }
   }
+}
+
+tagged_index_parser! {
+  type: TypeDefOrRef,
+  tag_length: 2,
+  patterns: [
+    0b00 => TypeDef,
+    0b01 => TypeRef,
+    0b10 => TypeSpec
+  ]
+}
+
+tagged_index_parser! {
+  type: ResolutionScope,
+  tag_length: 2,
+  patterns: [
+      0b00 => Module,
+      0b01 => ModuleRef,
+      0b10 => AssemblyRef,
+      0b11 => TypeRef
+  ]
 }
 
 #[derive(Debug)]
@@ -155,11 +195,11 @@ pub struct GuidHeap;
 pub struct BlobHeap;
 
 #[derive(Debug)]
-pub enum ResolutionScopeTag {
-  Module,
-  ModuleRef,
-  AssemblyRef,
-  TypeRef
+pub enum ResolutionScope {
+  Module(TableIndex<ModuleEntry>),
+  ModuleRef(TableIndex<TypeDefEntry>),
+  AssemblyRef(TableIndex<TypeDefEntry>),
+  TypeRef(TableIndex<TypeDefEntry>)
 }
 
 #[derive(Debug)]

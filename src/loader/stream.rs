@@ -6,7 +6,7 @@ use byteorder::{ReadBytesExt, LittleEndian};
 
 use utils::stream::*;
 use metadata::heap::{StringHeap, UserStringHeap, UserString};
-use loader::tables::{ModuleEntry, TableEntryReader};
+use loader::tables::{ModuleEntry, TableEntryReader, TypeRefEntry};
 
 #[derive(Debug, Clone)]
 pub struct StreamHeader {
@@ -128,6 +128,12 @@ impl From<u64> for TableIds {
 pub type RowCounts = HashMap<TableId, u32>;
 pub type IndexSizes = HashMap<TableId, IndexSize>;
 
+pub struct FieldSizes {
+  pub heap_sizes: HeapOffsetSizes,
+  pub row_counts: RowCounts,
+  pub index_sizes: IndexSizes  
+}
+
 impl From<u8> for HeapOffsetSizes {
   fn from(x: u8) -> HeapOffsetSizes {
     let str_index_bit = (x & 0b1) > 0;
@@ -183,8 +189,22 @@ impl StreamReader for MetaDataTablesStream {
     let index_sizes = MetaDataTablesStream::get_index_sizes(&table_rows_counts);
     println!("Metadata table index sizes: {:?}", index_sizes);
 
-    let module = ModuleEntry::read_entry(reader, heap_offset_sizes, index_sizes)?;
+    let sizes = FieldSizes {
+      heap_sizes: heap_offset_sizes,
+      row_counts: table_rows_counts.clone(),
+      index_sizes: index_sizes
+    };
+
+    let module = ModuleEntry::read_entry(reader, &sizes)?;
     println!("Module: {:?}", module);
+
+    let mut type_refs: Vec<TypeRefEntry> = Vec::new();
+    for _ in 0 .. *(table_rows_counts.get(&TableId::TypeRef).unwrap()) {
+      let entry = TypeRefEntry::read_entry(reader, &sizes)?;
+      type_refs.push(entry);
+    }
+
+    println!("TypeRefs: {:?}", type_refs);
 
     Ok(MetaDataTablesStream { })
   }
