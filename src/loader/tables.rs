@@ -8,28 +8,28 @@ use byteorder::{ReadBytesExt, LittleEndian};
 use loader::stream::{TableId, IndexSize, IndexSizes, RowCounts, HeapOffsetSizes, FieldSizes};
 
 pub trait ReadIndexSizeExt {
-  fn read_index<T>(&mut self, size: IndexSize) -> Result<TableIndex<T>>;
+  fn read_index<T>(&mut self, size: IndexSize) -> Result<Index<T>>;
 }
 
 impl<T: Read> ReadIndexSizeExt for T {
-  fn read_index<I>(&mut self, size: IndexSize) -> Result<TableIndex<I>> {
+  fn read_index<I>(&mut self, size: IndexSize) -> Result<Index<I>> {
     match size {
       IndexSize::Word => self.read_u16::<LittleEndian>().map(|x| x as u32),
       IndexSize::Dword => self.read_u32::<LittleEndian>()
-    }.map(|x| TableIndex::new(x))
+    }.map(|x| Index::new(x))
   }
 }
 
 #[derive(Debug, Copy, Clone)]
-pub struct TableIndex<T>(pub u32, PhantomData<T>);
+pub struct Index<T>(pub u32, PhantomData<T>);
 
 pub trait TableEntryReader {
   fn read_entry<R: Read>(reader: &mut R, sizes: &FieldSizes) -> Result<Self> where Self : Sized;
 }
 
-impl<T> TableIndex<T> {
-  fn new(index: u32) -> TableIndex<T> {
-    TableIndex(index, PhantomData::<T>)
+impl<T> Index<T> {
+  fn new(index: u32) -> Index<T> {
+    Index(index, PhantomData::<T>)
   }
 
   fn to_u32(self) -> u32 {
@@ -40,10 +40,10 @@ impl<T> TableIndex<T> {
 #[derive(Debug)]
 pub struct ModuleEntry {
   generation: u16,
-  name: TableIndex<StringHeap>,
-  mv_id: TableIndex<GuidHeap>,
-  enc_id: TableIndex<GuidHeap>,
-  enc_base_id: TableIndex<GuidHeap>
+  name: Index<StringHeap>,
+  mv_id: Index<GuidHeap>,
+  enc_id: Index<GuidHeap>,
+  enc_base_id: Index<GuidHeap>
 }
 
 #[derive(Debug)]
@@ -53,23 +53,54 @@ pub struct ModuleRefEntry { }
 pub struct AssemblyRefEntry { }
 
 #[derive(Debug)]
+pub struct FieldEntry { }
+
+#[derive(Debug)]
+pub struct ParamEntry { }
+
+#[derive(Debug)]
+pub struct PropertyEntry { }
+
+pub struct AssemblyEntry { }
+
+pub struct InterfaceImplEntry { }
+
+pub struct MethodDefEntry { }
+
+pub struct MethodRefEntry { }
+
+pub struct StandAloneSigEntry { }
+
+pub struct EventEntry { }
+
+pub struct PermissionEntry { }
+
+pub struct MemberRefEntry { }
+
+pub struct FileEntry { }
+
+pub struct ExportedTypeEntry { }
+
+pub struct ManifestResourceEntry { }
+
+#[derive(Debug)]
 pub struct TypeRefEntry {
   resolution_scope: ResolutionScope,
-  name: TableIndex<StringHeap>,
-  namespace: TableIndex<StringHeap>
+  name: Index<StringHeap>,
+  namespace: Index<StringHeap>
 }
 
 #[derive(Debug)]
 pub struct TypeDefEntry {
   flags: TypeAttributes,
-  name: TableIndex<StringHeap>,
-  namespace: TableIndex<StringHeap>,
+  name: Index<StringHeap>,
+  namespace: Index<StringHeap>,
   extends: TypeDefOrRef
 }
 
 #[derive(Debug)]
 pub struct TypeSpecEntry {
-  signature: TableIndex<BlobHeap>
+  signature: Index<BlobHeap>
 }
 
 impl TableEntryReader for ModuleEntry {
@@ -146,24 +177,44 @@ macro_rules! max_table_entries {
 }
 
 macro_rules! tagged_index_parser {
-    {
-      type: $type_: ident,
-      tag_length: $tag_length: expr,
-      patterns: [$($pattern: expr => $case: ident),*] 
-    } => {
-      impl $type_ {
-        pub fn read_from<R: Read>(reader: &mut R, row_counts: &RowCounts) -> Result<$type_> {
-          let max_size = max_table_entries!(row_counts, [$($case),*]);
-          let tagged_index = TaggedIndex::read_from(reader, 2, max_size)?;
-          match tagged_index.tag {
-            $(
-              $pattern => Ok($type_::$case(TableIndex::new(tagged_index.index)))
-            ),+,
-            otherwise => panic!("Invalid tag: {}", otherwise)
-          }
+  {
+    type: $type_: ident,
+    tag_length: $tag_length: expr,
+    patterns: [$($pattern: expr => $case: ident),*]
+  } => {
+    tagged_index_parser! {
+      type: $type_,
+      tag_length: $tag_length,
+      tables: [$($case),*],
+      patterns: [$($pattern => $case),+]
+    }
+  };
+  {
+    type: $type_: ident,
+    tag_length: $tag_length: expr,
+    tables: [$($table_id: ident),*],
+    patterns: [$($pattern: expr => $case: ident),*]
+  } => {
+    impl $type_ {
+      pub fn read_from<R: Read>(reader: &mut R, row_counts: &RowCounts) -> Result<$type_> {
+        let max_size = max_table_entries!(row_counts, [$($table_id),*]);
+        let tagged_index = TaggedIndex::read_from(reader, 2, max_size)?;
+        match tagged_index.tag {
+          $(
+            $pattern => Ok($type_::$case(Index::new(tagged_index.index)))
+          ),+,
+          otherwise => panic!("Invalid tag: {}", otherwise)
+        }
       }
     }
-  }
+  };
+}
+
+#[derive(Debug)]
+pub enum TypeDefOrRef {
+  TypeDef(Index<TypeDefEntry>),
+  TypeRef(Index<TypeRefEntry>),
+  TypeSpec(Index<TypeSpecEntry>)
 }
 
 tagged_index_parser! {
@@ -174,6 +225,202 @@ tagged_index_parser! {
     0b01 => TypeRef,
     0b10 => TypeSpec
   ]
+}
+
+#[derive(Debug)]
+pub enum HasConstant {
+  Field(Index<FieldEntry>),
+  Param(Index<ParamEntry>),
+  Property(Index<PropertyEntry>)
+}
+
+tagged_index_parser! {
+  type: HasConstant,
+  tag_length: 2,
+  patterns: [
+    0b00 => Field,
+    0b01 => Param,
+    0b10 => Property
+  ]
+}
+
+pub enum HasCustomAttribute {
+  MethodDef(Index<MethodDefEntry>),
+  Field(Index<FieldEntry>),
+  TypeRef(Index<TypeRefEntry>),
+  TypeDef(Index<TypeDefEntry>),
+  Param(Index<ParamEntry>),
+  InterfaceImpl(Index<InterfaceImplEntry>),
+  MemberRef(Index<MemberRefEntry>),
+  Module(Index<ModuleEntry>),
+  //Permission(Index<PermissionEntry>),
+  Property(Index<PropertyEntry>),
+  Event(Index<EventEntry>),
+  StandAloneSig(Index<StandAloneSigEntry>),
+  ModuleRef(Index<ModuleRefEntry>),
+  TypeSpec(Index<TypeSpecEntry>),
+  Assembly(Index<AssemblyEntry>),
+  AssemblyRef(Index<AssemblyRefEntry>),
+  File(Index<FileEntry>),
+  ExportedType(Index<ExportedTypeEntry>),
+  ManifestResource(Index<ManifestResourceEntry>)
+}
+
+tagged_index_parser! {
+  type: HasCustomAttribute,
+  tag_length: 5,
+  patterns: [
+    0b00000 => MethodDef,
+    0b00001 => Field,
+    0b00010 => TypeRef,
+    0b00011 => TypeDef,
+    0b00100 => Param,
+    0b00101 => InterfaceImpl,
+    0b00110 => MemberRef,
+    0b00111 => Module,
+    //0b01000 => Permission,
+    0b01001 => Property,
+    0b01010 => Event,
+    0b01011 => StandAloneSig,
+    0b01100 => ModuleRef,
+    0b01101 => TypeSpec,
+    0b01110 => Assembly,
+    0b01111 => AssemblyRef,
+    0b10000 => File,
+    0b10001 => ExportedType,
+    0b10010 => ManifestResource
+  ]
+}
+
+pub enum HasFieldMarshall {
+  Field(Index<FieldEntry>),
+  Param(Index<ParamEntry>)
+}
+
+tagged_index_parser! {
+  type: HasFieldMarshall,
+  tag_length: 1,
+  patterns: [
+    0b0 => Field,
+    0b1 => Param
+  ]
+}
+
+pub enum HasDeclSecurity {
+  TypeDef(Index<TypeDefEntry>),
+  MethodDef(Index<MethodDefEntry>),
+  Assembly(Index<AssemblyEntry>)
+}
+
+tagged_index_parser! {
+  type: HasDeclSecurity,
+  tag_length: 2,
+  patterns: [
+    0b00 => TypeDef,
+    0b01 => MethodDef,
+    0b10 => Assembly
+  ]
+}
+
+pub enum MemberRefParent {
+  TypeDef(Index<TypeDefEntry>),
+  TypeRef(Index<TypeRefEntry>),
+  ModuleRef(Index<ModuleRefEntry>),
+  MethodDef(Index<MethodDefEntry>),
+  TypeSpec(Index<TypeSpecEntry>)
+}
+
+tagged_index_parser! {
+  type: MemberRefParent,
+  tag_length: 3,
+  patterns: [
+    0b000 => TypeDef,
+    0b001 => TypeRef,
+    0b010 => ModuleRef,
+    0b011 => MethodDef,
+    0b100 => TypeSpec
+  ]
+}
+
+pub enum HasSemantics {
+  Event(Index<EventEntry>),
+  Property(Index<PropertyEntry>)
+}
+
+tagged_index_parser! {
+  type: HasSemantics,
+  tag_length: 1,
+  patterns: [
+    0b0 => Event,
+    0b1 => Property
+  ]
+}
+
+pub enum MethodDefOrRef {
+  MethodDef(Index<MethodDefEntry>),
+  MethodRef(Index<MemberRefEntry>)
+}
+
+tagged_index_parser! {
+  type: MethodDefOrRef,
+  tag_length: 1,
+  tables: [MethodDef, MemberRef],
+  patterns: [
+    0b0 => MethodDef,
+    0b1 => MethodRef
+  ]
+}
+
+pub enum MemberForwarded {
+  Field(Index<FieldEntry>),
+  MethodDef(Index<MemberRefEntry>)
+}
+
+tagged_index_parser! {
+  type: MemberForwarded,
+  tag_length: 1,
+  patterns: [
+    0b0 => Field,
+    0b1 => MethodDef
+  ]
+}
+
+pub enum Implementation {
+  File(Index<FileEntry>),
+  AssemblyRef(Index<AssemblyRefEntry>),
+  ExportedType(Index<ExportedTypeEntry>)
+}
+
+tagged_index_parser! {
+  type: Implementation,
+  tag_length: 2,
+  patterns: [
+    0b00 => File,
+    0b01 => AssemblyRef,
+    0b10 => ExportedType
+  ]
+}
+
+pub enum CustomAttributeType {
+  MethodDef(Index<MethodDefEntry>),
+  MemberRef(Index<MemberRefEntry>)
+}
+
+tagged_index_parser! {
+  type: CustomAttributeType,
+  tag_length: 3,
+  patterns: [
+    0b010 => MethodDef,
+    0b011 => MemberRef
+  ]
+}
+
+#[derive(Debug)]
+pub enum ResolutionScope {
+  Module(Index<ModuleEntry>),
+  ModuleRef(Index<TypeDefEntry>),
+  AssemblyRef(Index<TypeDefEntry>),
+  TypeRef(Index<TypeDefEntry>)
 }
 
 tagged_index_parser! {
@@ -187,27 +434,26 @@ tagged_index_parser! {
   ]
 }
 
+pub enum TypeOrMethodDef {
+  TypeDef(Index<TypeDefEntry>),
+  MethodDef(Index<MethodDefEntry>)
+}
+
+tagged_index_parser! {
+  type: TypeOrMethodDef,
+  tag_length: 1,
+  patterns: [
+    0b0 => TypeDef,
+    0b1 => MethodDef
+  ]
+}
+
 #[derive(Debug)]
 pub struct StringHeap;
 #[derive(Debug)]
 pub struct GuidHeap;
 #[derive(Debug)]
 pub struct BlobHeap;
-
-#[derive(Debug)]
-pub enum ResolutionScope {
-  Module(TableIndex<ModuleEntry>),
-  ModuleRef(TableIndex<TypeDefEntry>),
-  AssemblyRef(TableIndex<TypeDefEntry>),
-  TypeRef(TableIndex<TypeDefEntry>)
-}
-
-#[derive(Debug)]
-pub enum TypeDefOrRef {
-  TypeDef(TableIndex<TypeDefEntry>),
-  TypeRef(TableIndex<TypeRefEntry>),
-  TypeSpec(TableIndex<TypeSpecEntry>)
-}
 
 bitflags! {
   // https://github.com/dotnet/coreclr/blob/master/src/inc/corhdr.h#L276

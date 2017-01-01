@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::io::Cursor;
 
 use loader::stream::{TableId};
-use loader::tables::{TableIndex, TypeDefOrRef};
+use loader::tables::{Index, TypeDefOrRef};
 
 #[test]
 fn type_def_or_ref_16k_rows() {
@@ -18,7 +18,7 @@ fn type_def_or_ref_16k_rows() {
   let type_def_or_ref = TypeDefOrRef::read_from(&mut cursor, &row_counts).unwrap();
 
   match type_def_or_ref {
-    TypeDefOrRef::TypeRef(TableIndex(index, _)) => assert_eq!(0xC8, index, "TypeRef index must equal 0xC8."),
+    TypeDefOrRef::TypeRef(Index(index, _)) => assert_eq!(0xC8, index, "TypeRef index must equal 0xC8."),
     otherwise => assert!(false, "TypeDefOrRef must be TypeRef(0xC8) (was {:?})", otherwise)
   }
 
@@ -38,7 +38,7 @@ fn type_def_or_ref_over_16k_rows() {
   let type_def_or_ref = TypeDefOrRef::read_from(&mut cursor, &row_counts).unwrap();
 
   match type_def_or_ref {
-    TypeDefOrRef::TypeRef(TableIndex(index, _)) =>
+    TypeDefOrRef::TypeRef(Index(index, _)) =>
       assert_eq!(0x4000, index, "TypeRef index must equal 0x4000."),
     otherwise =>
       assert!(false, "TypeDefOrRef must be TypeRef(0xC8)")
