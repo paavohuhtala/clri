@@ -2,11 +2,15 @@
 use std::io::{Read, Seek, Cursor, SeekFrom, Result};
 use std::collections::HashMap;
 use std::iter::FromIterator;
+
 use byteorder::{ReadBytesExt, LittleEndian};
+
 use utils::stream::*;
 use loader::pe::{DataDirectory, Section};
-use metadata::heap::{StringHeap, UserStringHeap};
+use metadata::heap::{StringHeap, UserStringHeap, BlobHeap, Heaps};
 use loader::stream::{StreamHeader, MetaDataTablesStream, StreamReader};
+
+use metadata::Metadata;
 
 #[derive(Debug)]
 pub struct CLIHeader {
@@ -28,8 +32,9 @@ pub struct MethodBody {
 
 #[derive(Debug)]
 pub struct CLRImage {
-  cli_header: CLIHeader,
-  strong_name_signature: Option<Vec<u8>>
+  pub cli_header: CLIHeader,
+  pub strong_name_signature: Option<Vec<u8>>,
+  pub metadata: Metadata
 }
 
 impl ReadableStruct for CLIHeader {
@@ -131,14 +136,16 @@ impl CLRImage {
       T::read_from(reader, header)
     }
 
-    let strings_table: StringHeap = read_stream(&mut reader, metadata_header_offset, &metadata_header, "#Strings")?;
-    let user_strings_table: UserStringHeap = read_stream(&mut reader, metadata_header_offset, &metadata_header, "#US")?;
-    let metadata_tables: MetaDataTablesStream = read_stream(&mut reader, metadata_header_offset, &metadata_header, "#~")?;
+    let strings: StringHeap = read_stream(&mut reader, metadata_header_offset, &metadata_header, "#Strings")?;
+    let user_strings: UserStringHeap = read_stream(&mut reader, metadata_header_offset, &metadata_header, "#US")?;
+    let metadata_stream: MetaDataTablesStream = read_stream(&mut reader, metadata_header_offset, &metadata_header, "#~")?;
 
-    println!("{:?}", strings_table);
-    println!("{:?}", user_strings_table);
-    println!("{:?}", metadata_tables);
+    let heaps = Heaps {
+      strings, user_strings, blobs: BlobHeap { blobs: HashMap::new() }
+    };
 
-    Ok(CLRImage { cli_header, strong_name_signature })
+    let metadata = Metadata { heaps, tables: metadata_stream.tables };
+
+    Ok(CLRImage { cli_header, strong_name_signature, metadata })
   }
 }

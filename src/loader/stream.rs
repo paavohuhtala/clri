@@ -1,12 +1,15 @@
 
+use std::fmt::Debug;
 use std::io::{Read, Seek, Result};
 use std::collections::HashMap;
 use enum_primitive::FromPrimitive;
 use byteorder::{ReadBytesExt, LittleEndian};
+use typemap::{Key, DebugMap, TypeMap};
 
 use utils::stream::*;
 use metadata::heap::{StringHeap, UserStringHeap, UserString};
-use loader::tables::{ModuleEntry, TableEntryReader, TypeRefEntry, TypeDefEntry};
+use metadata::tables::*;
+use metadata::{Metadata, MetadataTable};
 
 #[derive(Debug, Clone)]
 pub struct StreamHeader {
@@ -26,9 +29,9 @@ impl ReadableStruct for StreamHeader {
 }
 
 /// The #~ stream.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct MetaDataTablesStream {
-
+  pub tables: DebugMap
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -195,27 +198,67 @@ impl StreamReader for MetaDataTablesStream {
       index_sizes: index_sizes
     };
 
+    let pos = reader.get_seek_pos()?;
+    println!("First entry at {:x}", pos);
     let module = ModuleEntry::read_entry(reader, &sizes)?;
     println!("Module: {:?}", module);
 
-    let mut type_refs: Vec<TypeRefEntry> = Vec::new();
-    for _ in 0 .. *(table_rows_counts.get(&TableId::TypeRef).unwrap()) {
-      let entry = TypeRefEntry::read_entry(reader, &sizes)?;
-      type_refs.push(entry);
+    struct TableReader<'a, R: 'a + Read + Seek> {
+      reader: &'a mut R,
+      sizes: &'a FieldSizes
     }
 
-    println!("TypeRefs: {:?}", type_refs);
+    impl<'a, R: Read + Seek> TableReader<'a, R> {
+      fn new(reader: &'a mut R, sizes: &'a FieldSizes) -> TableReader<'a, R> {
+        TableReader { reader, sizes }
+      }
 
-    let mut type_defs: Vec<TypeDefEntry> = Vec::new();
+      fn read<T: TableEntryReader + MetadataTable + Debug>(&mut self) -> Result<Vec<T>> {
+        let row_count = *self.sizes.row_counts.get(&T::TABLE_ID).unwrap_or(&0) as usize;
+        let mut entries = Vec::with_capacity(row_count);
+        
+        for i in 0 .. row_count {
+          let pos = self.reader.get_seek_pos()?;
+          println!("Entry #{} at {:x}", i, pos);
+          let entry = T::read_entry(self.reader, self.sizes)?;
+          println!("{:?}", entry);
+          entries.push(entry);
+        }
 
-    for _ in 0 .. *(table_rows_counts.get(&TableId::TypeDef).unwrap()) {
-      let entry = TypeDefEntry::read_entry(reader, &sizes)?;
-      type_defs.push(entry);
+        Ok(entries)
+      }
     }
 
-    println!("TypeDefs: {:?}", type_defs);
+    let type_refs: Vec<TypeRefEntry>;
+    let type_defs: Vec<TypeDefEntry>;
+    let method_defs: Vec<MethodDefEntry>;
+    let member_refs: Vec<MemberRefEntry>;
+    let custom_attributes: Vec<CustomAttributeEntry>;
+    let assembly: Vec<AssemblyEntry>;
+    let assembly_refs: Vec<AssemblyRefEntry>;
+    
+    {
+      let mut table_reader = TableReader::new(reader, &sizes);
+      type_refs = table_reader.read()?;
+      type_defs = table_reader.read()?;
+      method_defs = table_reader.read()?;
+      member_refs = table_reader.read()?;
+      custom_attributes = table_reader.read()?;
+      assembly = table_reader.read()?;
+      assembly_refs = table_reader.read()?;
+    }
 
-    Ok(MetaDataTablesStream { })
+    let mut tables = TypeMap::custom();
+    tables.insert::<ModuleEntry>(vec![module]);
+    tables.insert::<TypeRefEntry>(type_refs);
+    tables.insert::<TypeDefEntry>(type_defs);
+    tables.insert::<MethodDefEntry>(method_defs);
+    tables.insert::<MemberRefEntry>(member_refs);
+    tables.insert::<CustomAttributeEntry>(custom_attributes);
+    tables.insert::<AssemblyEntry>(assembly);
+    tables.insert::<AssemblyRefEntry>(assembly_refs);
+
+    Ok(MetaDataTablesStream { tables })
   }
 }
 

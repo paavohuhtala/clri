@@ -1,16 +1,20 @@
 
 #![feature(field_init_shorthand)]
 #![feature(box_syntax)]
+#![feature(associated_type_defaults)]
+#![feature(associated_consts)]
 
 #![allow(dead_code)]
 
 #[macro_use] extern crate enum_primitive;
 #[macro_use] extern crate bitflags;
 extern crate byteorder;
+extern crate typemap;
 
 #[macro_use] mod utils;
 mod metadata;
 mod loader;
+mod runtime;
 
 #[cfg(test)]
 mod tests;
@@ -70,5 +74,10 @@ fn main() {
   let mut file_reader = std::io::BufReader::new(file);
   let pe_file = pe::PEFile::read_from(&mut file_reader).unwrap();
   let text = pe_file.sections.get(".text").unwrap();
-  loader::clr::CLRImage::from_section(text).unwrap();
+  let image = loader::clr::CLRImage::from_section(text).unwrap();
+
+  use metadata::tables::*;
+  use metadata::debug::*;
+
+  println!("{}", (*image.metadata.tables.get::<ModuleEntry>().unwrap())[0].as_debug(&image.metadata));
 }

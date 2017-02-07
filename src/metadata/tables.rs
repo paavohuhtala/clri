@@ -9,6 +9,26 @@ use loader::stream::{TableId, IndexSize, RowCounts, FieldSizes};
 
 pub trait ReadIndexSizeExt {
   fn read_index<T>(&mut self, size: IndexSize) -> Result<Index<T>>;
+
+  fn read_table_index<T>(&mut self, sizes: &FieldSizes, table_id: TableId) -> Result<Index<T>> {
+    let size = *sizes.index_sizes.get(&table_id).unwrap_or(&IndexSize::Word);
+    self.read_index(size)
+  }
+
+  fn read_guid(&mut self, sizes: &FieldSizes) -> Result<Index<GuidHeap>> {
+    let size = sizes.heap_sizes.guid_index;
+    self.read_index(size)
+  }
+
+  fn read_string(&mut self, sizes: &FieldSizes) -> Result<Index<StringHeap>> {
+    let size = sizes.heap_sizes.string_index;
+    self.read_index(size)
+  }
+
+  fn read_blob(&mut self, sizes: &FieldSizes) -> Result<Index<BlobHeap>> {
+    let size = sizes.heap_sizes.blob_index;
+    self.read_index(size)
+  }
 }
 
 impl<T: Read> ReadIndexSizeExt for T {
@@ -39,48 +59,96 @@ impl<T> Index<T> {
 
 #[derive(Debug)]
 pub struct ModuleEntry {
-  generation: u16,
-  name: Index<StringHeap>,
-  mv_id: Index<GuidHeap>,
-  enc_id: Index<GuidHeap>,
-  enc_base_id: Index<GuidHeap>
+  pub generation: u16,
+  pub name: Index<StringHeap>,
+  pub mv_id: Index<GuidHeap>,
+  pub enc_id: Index<GuidHeap>,
+  pub enc_base_id: Index<GuidHeap>
 }
 
 #[derive(Debug)]
 pub struct ModuleRefEntry { }
 
 #[derive(Debug)]
-pub struct AssemblyRefEntry { }
-
-#[derive(Debug)]
 pub struct FieldEntry { }
 
 #[derive(Debug)]
-pub struct ParamEntry { }
+pub struct ParamEntry {
+  // CorParamAttr
+  flags: u16,
+  sequence: u16,
+  name: Index<StringHeap>
+}
 
 #[derive(Debug)]
 pub struct PropertyEntry { }
 
-pub struct AssemblyEntry { }
+#[derive(Debug)]
+pub struct AssemblyEntry {
+  pub hash_algorithm: u32,
+  pub major_version: u16,
+  pub minor_version: u16,
+  pub build_number: u16,
+  pub revision_number: u16,
+  // AssemblyFlags
+  pub flags: u32,
+  pub public_key: Index<BlobHeap>,
+  pub name: Index<StringHeap>,
+  pub culture: Index<StringHeap>
+}
 
+#[derive(Debug)]
+pub struct AssemblyRefEntry {
+  pub major_version: u16,
+  pub minor_version: u16,
+  pub build_number: u16,
+  pub revision_number: u16,
+  // AssemblyFlags
+  pub flags: u32,
+  pub public_key_or_token: Index<BlobHeap>,
+  pub name: Index<StringHeap>,
+  pub culture: Index<StringHeap>,
+  pub hash_value: Index<BlobHeap>
+}
+
+#[derive(Debug)]
 pub struct InterfaceImplEntry { }
 
-pub struct MethodDefEntry { }
+#[derive(Debug)]
+pub struct MethodDefEntry {
+  rva: u32,
+  // CorMethodImpl
+  impl_flags: u16,
+  // CorMethodAttr
+  flags: u16,
+  name: Index<StringHeap>,
+  signature: Index<BlobHeap>,
+  param_list: Index<ParamEntry>
+}
 
-pub struct MethodRefEntry { }
+#[derive(Debug)]
+pub struct MemberRefEntry {
+  pub class: MemberRefParent,
+  pub name: Index<StringHeap>,
+  pub signature: Index<BlobHeap>
+}
 
+#[derive(Debug)]
 pub struct StandAloneSigEntry { }
 
+#[derive(Debug)]
 pub struct EventEntry { }
 
+#[derive(Debug)]
 pub struct PermissionEntry { }
 
-pub struct MemberRefEntry { }
-
+#[derive(Debug)]
 pub struct FileEntry { }
 
+#[derive(Debug)]
 pub struct ExportedTypeEntry { }
 
+#[derive(Debug)]
 pub struct ManifestResourceEntry { }
 
 #[derive(Debug)]
@@ -95,7 +163,9 @@ pub struct TypeDefEntry {
   flags: TypeAttributes,
   name: Index<StringHeap>,
   namespace: Index<StringHeap>,
-  extends: TypeDefOrRef
+  extends: TypeDefOrRef,
+  fields: Index<FieldEntry>,
+  methods: Index<MethodDefEntry>
 }
 
 #[derive(Debug)]
@@ -103,23 +173,30 @@ pub struct TypeSpecEntry {
   signature: Index<BlobHeap>
 }
 
+#[derive(Debug)]
+pub struct CustomAttributeEntry {
+  pub parent: HasCustomAttribute,
+  pub constructor: CustomAttributeType,
+  pub value: Index<BlobHeap>
+}
+
 impl TableEntryReader for ModuleEntry {
   fn read_entry<R: Read>(reader: &mut R, sizes: &FieldSizes) -> Result<ModuleEntry> {
     let generation = reader.read_u16::<LittleEndian>()?;
-    let name = reader.read_index(sizes.heap_sizes.string_index)?;
-    let mv_id = reader.read_index(sizes.heap_sizes.guid_index)?;
-    let enc_id = reader.read_index(sizes.heap_sizes.guid_index)?;
-    let enc_base_id = reader.read_index(sizes.heap_sizes.guid_index)?;
+    let name = reader.read_string(sizes)?;
+    let mv_id = reader.read_guid(sizes)?;
+    let enc_id = reader.read_guid(sizes)?;
+    let enc_base_id = reader.read_guid(sizes)?;
 
-    Ok(ModuleEntry {generation, name, mv_id, enc_id, enc_base_id} )
+    Ok(ModuleEntry { generation, name, mv_id, enc_id, enc_base_id } )
   }
 }
 
 impl TableEntryReader for TypeRefEntry {
   fn read_entry<R: Read>(reader: &mut R, sizes: &FieldSizes) -> Result<TypeRefEntry> {
     let resolution_scope = ResolutionScope::read_from(reader, &sizes.row_counts)?;
-    let name = reader.read_index(sizes.heap_sizes.string_index)?;
-    let namespace = reader.read_index(sizes.heap_sizes.string_index)?;
+    let name = reader.read_string(sizes)?;
+    let namespace = reader.read_string(sizes)?;
 
     Ok(TypeRefEntry { resolution_scope, name, namespace })
   }
@@ -129,11 +206,97 @@ impl TableEntryReader for TypeDefEntry {
   fn read_entry<R: Read>(reader: &mut R, sizes: &FieldSizes) -> Result<TypeDefEntry> {
     let flags_encoded = reader.read_u32::<LittleEndian>()?;
     let flags = TypeAttributes::from_bits(flags_encoded).unwrap();
-    let name = reader.read_index(sizes.heap_sizes.string_index)?;
-    let namespace = reader.read_index(sizes.heap_sizes.string_index)?;
+    let name = reader.read_string(sizes)?;
+    let namespace = reader.read_string(sizes)?;
     let extends = TypeDefOrRef::read_from(reader, &sizes.row_counts)?;
+    let fields = reader.read_table_index(sizes, TableId::Field)?;
+    let methods = reader.read_table_index(sizes, TableId::MethodDef)?;
 
-    Ok(TypeDefEntry { flags, name, namespace, extends })
+    Ok(TypeDefEntry { flags, name, namespace, extends, fields, methods })
+  }
+}
+
+impl TableEntryReader for MethodDefEntry {
+  fn read_entry<R: Read>(reader: &mut R, sizes: &FieldSizes) -> Result<MethodDefEntry> {
+    let rva = reader.read_u32::<LittleEndian>()?;
+    let impl_flags = reader.read_u16::<LittleEndian>()?;
+    let flags = reader.read_u16::<LittleEndian>()?;
+    let name = reader.read_string(sizes)?;
+    let signature = reader.read_blob(sizes)?;
+    let param_list = reader.read_table_index(sizes, TableId::Param)?;
+
+    Ok(MethodDefEntry { flags, name, impl_flags, param_list, rva, signature })
+  }
+}
+
+impl TableEntryReader for MemberRefEntry {
+  fn read_entry<R: Read>(reader: &mut R, sizes: &FieldSizes) -> Result<MemberRefEntry> {
+    let class = MemberRefParent::read_from(reader, &sizes.row_counts)?;
+    let name = reader.read_string(sizes)?;
+    let signature = reader.read_blob(sizes)?;
+
+    Ok(MemberRefEntry { class, name, signature })
+  }
+}
+
+impl TableEntryReader for CustomAttributeEntry {
+  fn read_entry<R: Read>(reader: &mut R, sizes: &FieldSizes) -> Result<CustomAttributeEntry> {
+    let parent = HasCustomAttribute::read_from(reader, &sizes.row_counts)?;
+    let constructor = CustomAttributeType::read_from(reader, &sizes.row_counts)?;
+    let value = reader.read_blob(sizes)?;
+
+    Ok(CustomAttributeEntry { parent, constructor, value })
+  }
+}
+
+impl TableEntryReader for AssemblyEntry {
+  fn read_entry<R: Read>(reader: &mut R, sizes: &FieldSizes) -> Result<AssemblyEntry> {
+    let hash_algorithm = reader.read_u32::<LittleEndian>()?;
+
+    let major_version = reader.read_u16::<LittleEndian>()?;
+    let minor_version = reader.read_u16::<LittleEndian>()?;
+    let build_number = reader.read_u16::<LittleEndian>()?;
+    let revision_number = reader.read_u16::<LittleEndian>()?;
+
+    let flags = reader.read_u32::<LittleEndian>()?;
+
+    let public_key = reader.read_blob(sizes)?;
+    let name = reader.read_string(sizes)?;
+    let culture = reader.read_string(sizes)?;
+
+    Ok(AssemblyEntry {
+      hash_algorithm,
+      major_version, minor_version, build_number, revision_number,
+      flags,
+      public_key,
+      name,
+      culture
+    })
+  }
+}
+
+impl TableEntryReader for AssemblyRefEntry {
+  fn read_entry<R: Read>(reader: &mut R, sizes: &FieldSizes) -> Result<AssemblyRefEntry> {
+    let major_version = reader.read_u16::<LittleEndian>()?;
+    let minor_version = reader.read_u16::<LittleEndian>()?;
+    let build_number = reader.read_u16::<LittleEndian>()?;
+    let revision_number = reader.read_u16::<LittleEndian>()?;
+
+    let flags = reader.read_u32::<LittleEndian>()?;
+
+    let public_key_or_token = reader.read_blob(sizes)?;
+    let name = reader.read_string(sizes)?;
+    let culture = reader.read_string(sizes)?;
+    let hash_value = reader.read_blob(sizes)?;
+
+    Ok(AssemblyRefEntry {
+      major_version, minor_version, build_number, revision_number,
+      flags,
+      public_key_or_token,
+      name,
+      culture,
+      hash_value
+    })
   }
 }
 
@@ -256,6 +419,7 @@ tagged_index_parser! {
   ]
 }
 
+#[derive(Debug)]
 pub enum HasCustomAttribute {
   MethodDef(Index<MethodDefEntry>),
   Field(Index<FieldEntry>),
@@ -263,7 +427,7 @@ pub enum HasCustomAttribute {
   TypeDef(Index<TypeDefEntry>),
   Param(Index<ParamEntry>),
   InterfaceImpl(Index<InterfaceImplEntry>),
-  MemberRef(Index<MemberRefEntry>),
+  MemberRef(Index<MethodDefEntry>),
   Module(Index<ModuleEntry>),
   //Permission(Index<PermissionEntry>),
   Property(Index<PropertyEntry>),
@@ -304,6 +468,7 @@ tagged_index_parser! {
   ]
 }
 
+#[derive(Debug)]
 pub enum HasFieldMarshall {
   Field(Index<FieldEntry>),
   Param(Index<ParamEntry>)
@@ -318,6 +483,7 @@ tagged_index_parser! {
   ]
 }
 
+#[derive(Debug)]
 pub enum HasDeclSecurity {
   TypeDef(Index<TypeDefEntry>),
   MethodDef(Index<MethodDefEntry>),
@@ -334,6 +500,7 @@ tagged_index_parser! {
   ]
 }
 
+#[derive(Debug)]
 pub enum MemberRefParent {
   TypeDef(Index<TypeDefEntry>),
   TypeRef(Index<TypeRefEntry>),
@@ -354,6 +521,7 @@ tagged_index_parser! {
   ]
 }
 
+#[derive(Debug)]
 pub enum HasSemantics {
   Event(Index<EventEntry>),
   Property(Index<PropertyEntry>)
@@ -368,6 +536,7 @@ tagged_index_parser! {
   ]
 }
 
+#[derive(Debug)]
 pub enum MethodDefOrRef {
   MethodDef(Index<MethodDefEntry>),
   MethodRef(Index<MemberRefEntry>)
@@ -383,6 +552,7 @@ tagged_index_parser! {
   ]
 }
 
+#[derive(Debug)]
 pub enum MemberForwarded {
   Field(Index<FieldEntry>),
   MethodDef(Index<MemberRefEntry>)
@@ -397,6 +567,7 @@ tagged_index_parser! {
   ]
 }
 
+#[derive(Debug)]
 pub enum Implementation {
   File(Index<FileEntry>),
   AssemblyRef(Index<AssemblyRefEntry>),
@@ -413,6 +584,7 @@ tagged_index_parser! {
   ]
 }
 
+#[derive(Debug)]
 pub enum CustomAttributeType {
   MethodDef(Index<MethodDefEntry>),
   MemberRef(Index<MemberRefEntry>)

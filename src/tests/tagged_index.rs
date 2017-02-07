@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::io::Cursor;
 
 use loader::stream::{TableId};
-use loader::tables::{Index, TypeDefOrRef};
+use metadata::tables::{Index, TypeDefOrRef};
 
 #[test]
 fn type_def_or_ref_16k_rows() {

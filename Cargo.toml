@@ -7,3 +7,4 @@ authors = ["Paavo Huhtala <paavo.huhtala@gmail.com>"]
 byteorder = "0.5"
 enum_primitive = "*"
 bitflags = "*"
+typemap = "*"
