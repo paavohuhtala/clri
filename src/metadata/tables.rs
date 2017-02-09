@@ -116,7 +116,7 @@ pub struct InterfaceImplEntry { }
 
 #[derive(Debug)]
 pub struct MethodDefEntry {
-  rva: u32,
+  pub rva: u32,
   // CorMethodImpl
   impl_flags: u16,
   // CorMethodAttr

@@ -6,7 +6,8 @@ use std::iter::FromIterator;
 use byteorder::{ReadBytesExt, LittleEndian};
 
 use utils::stream::*;
-use loader::pe::{DataDirectory, Section};
+use loader::pe::{DataDirectory, Section, PEFile};
+use loader::code::*;
 use metadata::heap::{StringHeap, UserStringHeap, BlobHeap, Heaps};
 use loader::stream::{StreamHeader, MetaDataTablesStream, StreamReader};
 
@@ -23,11 +24,6 @@ pub struct CLIHeader {
 pub struct MetadataHeader {
   clr_version: String,
   stream_headers: HashMap<String, StreamHeader>
-}
-
-#[derive(Debug)]
-pub struct MethodBody {
-
 }
 
 #[derive(Debug)]
@@ -109,7 +105,8 @@ impl ReadableStruct for MetadataHeader {
 }
 
 impl CLRImage {
-  pub fn from_section(section: &Section) -> Result<CLRImage> {
+  pub fn from_pe(pe: &PEFile) -> Result<CLRImage> {
+    let section = pe.sections.get(".text").unwrap();
     let mut reader = Cursor::new(section.data.clone());
     // Skip the CLR loader stub
     reader.skip(8)?;
@@ -144,7 +141,23 @@ impl CLRImage {
       strings, user_strings, blobs: BlobHeap { blobs: HashMap::new() }
     };
 
-    let metadata = Metadata { heaps, tables: metadata_stream.tables };
+    let mut method_bodies = HashMap::new();
+    
+    {
+      use metadata::tables::MethodDefEntry;
+      let method_defs = metadata_stream.tables.get::<MethodDefEntry>().unwrap();
+
+      for (i, method_def) in method_defs.iter().enumerate() {
+        let (section, offset) = pe.rva_to_section_offset(method_def.rva).unwrap();
+        // CONSIDER not creating a new cursor for each method
+        let mut cursor = Cursor::new(&section.data);
+        cursor.seek(SeekFrom::Start(offset as u64))?;
+        let method_body = MethodBody::read(&mut cursor)?;
+        method_bodies.insert(i as u32, method_body);
+      }
+    }
+
+    let metadata = Metadata { heaps, tables: metadata_stream.tables, method_bodies };
 
     Ok(CLRImage { cli_header, strong_name_signature, metadata })
   }

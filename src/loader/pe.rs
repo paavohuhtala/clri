@@ -48,8 +48,8 @@ pub struct Section {
 }
 
 impl Section {
-  pub fn resolve_rva(&self, data_directory: &DataDirectory) -> u32 {
-    data_directory.virtual_address - self.header.virtual_address   
+  pub fn resolve_rva(&self, rva: u32) -> u32 {
+    rva - self.header.virtual_address
   }
 }
 
@@ -59,10 +59,10 @@ pub struct PEFile {
 }
 
 impl PEFile {
-  pub fn rva_to_section_offset(&mut self, directory: DataDirectory) -> Option<(&Section, u32)> {
-    let section = self.sections.values().find(|s| s.header.virtual_address <= directory.virtual_address &&
-                                                  s.header.virtual_address + s.header.real_size >= directory.virtual_address);
-    section.map(|s| (s, s.resolve_rva(&directory)))
+  pub fn rva_to_section_offset(&self, rva: u32) -> Option<(&Section, u32)> {
+    let section = self.sections.values().find(|s| s.header.virtual_address <= rva &&
+                                                  s.header.virtual_address + s.header.real_size >= rva);
+    section.map(|s| (s, s.resolve_rva(rva)))
   }
 
   pub fn read_from<R: Read + Seek>(reader: &mut R) -> Result<PEFile> {

@@ -1,6 +1,9 @@
 
 use std::fmt::Debug;
-use typemap::{TypeMap, DebugMap, Key};
+use std::collections::HashMap;
+use typemap::{DebugMap, Key};
+
+use loader::code::MethodBody;
 
 pub mod heap;
 pub mod tables;
@@ -12,7 +15,8 @@ use metadata::heap::Heaps;
 #[derive(Debug)]
 pub struct Metadata {
   pub tables: DebugMap,
-  pub heaps: Heaps
+  pub heaps: Heaps,
+  pub method_bodies: HashMap<u32, MethodBody>
 }
 
 impl Metadata {

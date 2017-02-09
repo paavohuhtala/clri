@@ -73,8 +73,7 @@ fn main() {
   let file = std::fs::File::open("sample/helloworld/HelloWorld.exe").unwrap();
   let mut file_reader = std::io::BufReader::new(file);
   let pe_file = pe::PEFile::read_from(&mut file_reader).unwrap();
-  let text = pe_file.sections.get(".text").unwrap();
-  let image = loader::clr::CLRImage::from_section(text).unwrap();
+  let image = loader::clr::CLRImage::from_pe(&pe_file).unwrap();
 
   use metadata::tables::*;
   use metadata::debug::*;
